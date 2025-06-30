@@ -1,133 +1,143 @@
 import logging
-import os
-import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler
+import httpx
+import os
 
-# 📌 إعداد مفاتيح البيئة
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-TWELVE_API_KEY = os.getenv("TD_API_KEY")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+TOKEN = os.environ.get("BOT_TOKEN")
+TWELVE_API_KEY = os.environ.get("TD_API_KEY")
 
-# 🎯 إعداد السجل
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ✅ قائمة الأزرار الرئيسية
 start_keyboard = InlineKeyboardMarkup([
-    [InlineKeyboardButton("🔍 تحليل الذهب", callback_data="analyze")]
+    [InlineKeyboardButton("🔍 تحليل الذهب", callback_data="analyze")],
 ])
 
-# ✅ أزرار اختيار الإطار الزمني
 timeframes_keyboard = InlineKeyboardMarkup([
     [InlineKeyboardButton("1 دقيقة", callback_data="analyze_1min")],
     [InlineKeyboardButton("5 دقائق", callback_data="analyze_5min")],
-    [InlineKeyboardButton("15 دقيقة", callback_data="analyze_15min")]
+    [InlineKeyboardButton("15 دقيقة", callback_data="analyze_15min")],
 ])
 
-# ⏱ أمر /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 مرحبًا بك!\nاضغط على الزر لبدء تحليل الذهب:",
+        "👋 مرحبًا بك!\nاضغط على الزر أدناه لبدء تحليل الذهب:", 
         reply_markup=start_keyboard
     )
 
-# 🧠 تحليل عبر الذكاء الاصطناعي
-async def explain_with_ai(prompt: str):
-    try:
-        async with httpx.AsyncClient() as client:
-            res = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model": "openai/gpt-3.5-turbo",
-                    "messages": [
-                        {"role": "system", "content": "أنت خبير تحليلات فنية مالية، اشرح بلغة بسيطة للمستخدم ما الذي يحدث في السوق ولماذا نشتري أو نبيع أو ننتظر."},
-                        {"role": "user", "content": prompt}
-                    ]
-                }
-            )
-            data = res.json()
-            return data['choices'][0]['message']['content']
-    except Exception as e:
-        return "❌ فشل الذكاء الاصطناعي في توليد التفسير."
-
-# 📥 التعامل مع الضغط على الأزرار
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     if query.data == "analyze":
-        await query.edit_message_text("📊 اختر الإطار الزمني:", reply_markup=timeframes_keyboard)
-
+        await query.edit_message_text("اختر الإطار الزمني:", reply_markup=timeframes_keyboard)
     elif query.data.startswith("analyze_"):
         interval = query.data.split("_")[1]
         await analyze_gold(query, interval)
 
-# 📈 تحليل الذهب باستخدام TwelveData + AI
 async def analyze_gold(query, interval):
     symbol = "XAU/USD"
-    url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize=20&apikey={TWELVE_API_KEY}"
+    url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize=30&apikey={TWELVE_API_KEY}"
+
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url)
+        data = response.json()
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url)
-            data = response.json()
-
         candles = data['values']
-        current = float(candles[0]['close'])
-        ema20 = sum(float(c['close']) for c in candles[:20]) / 20
+        closes = [float(c['close']) for c in candles[::-1]]  # قديم -> جديد
+        highs = [float(c['high']) for c in candles[::-1]]
+        lows = [float(c['low']) for c in candles[::-1]]
 
-        # RSI تقريبي
-        gains, losses = [], []
-        for i in range(1, 15):
-            diff = float(candles[i - 1]['close']) - float(candles[i]['close'])
-            (gains if diff > 0 else losses).append(abs(diff))
+        # حساب EMA20
+        def ema(values, period=20):
+            ema_values = []
+            k = 2 / (period + 1)
+            ema_values.append(sum(values[:period]) / period)  # متوسط بسيط لأول EMA
+            for price in values[period:]:
+                ema_today = (price - ema_values[-1]) * k + ema_values[-1]
+                ema_values.append(ema_today)
+            return ema_values[-1]
 
-        avg_gain = sum(gains) / 14 if gains else 0.01
-        avg_loss = sum(losses) / 14 if losses else 0.01
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
+        ema20 = ema(closes)
 
-        # توصية منطقية
-        if rsi > 70 and current > ema20:
+        # حساب RSI (14 فترة)
+        def rsi(values, period=14):
+            gains = []
+            losses = []
+            for i in range(1, len(values)):
+                delta = values[i] - values[i-1]
+                if delta > 0:
+                    gains.append(delta)
+                    losses.append(0)
+                else:
+                    gains.append(0)
+                    losses.append(abs(delta))
+            avg_gain = sum(gains[:period]) / period
+            avg_loss = sum(losses[:period]) / period
+            rs = avg_gain / avg_loss if avg_loss != 0 else 0
+            rsi_val = 100 - (100 / (1 + rs))
+            return rsi_val
+
+        rsi_val = rsi(closes)
+
+        current = closes[-1]
+
+        # تحليل نموذج شمعة (شمعة الأخيرة)
+        last_candle = candles[0]
+        open_price = float(last_candle['open'])
+        close_price = float(last_candle['close'])
+        high_price = float(last_candle['high'])
+        low_price = float(last_candle['low'])
+
+        candle_body = abs(close_price - open_price)
+        candle_range = high_price - low_price
+        candle_upper_shadow = high_price - max(open_price, close_price)
+        candle_lower_shadow = min(open_price, close_price) - low_price
+
+        # مثال بسيط لنموذج الابتلاع (Engulfing)
+        candle_pattern = "لا يوجد نموذج مميز"
+        if close_price > open_price and candle_body > candle_upper_shadow + candle_lower_shadow:
+            candle_pattern = "شمعة صعود قوية (Bullish Engulfing محتمل)"
+        elif open_price > close_price and candle_body > candle_upper_shadow + candle_lower_shadow:
+            candle_pattern = "شمعة هبوط قوية (Bearish Engulfing محتمل)"
+
+        # تحليل التوصية بناءً على EMA و RSI و نموذج الشمعة
+        if rsi_val > 70 and current > ema20:
             reco = "📉 بيع 🔴"
-            reason = "RSI مرتفع والسعر فوق EMA20"
-        elif rsi < 30 and current < ema20:
+            reason = "السعر مرتفع جداً والـ RSI فوق 70، مع إشارة إلى تشبع الشراء."
+        elif rsi_val < 30 and current < ema20:
             reco = "📈 شراء 🟢"
-            reason = "RSI منخفض والسعر تحت EMA20"
+            reason = "السعر منخفض جداً والـ RSI تحت 30، مع احتمال ارتداد."
+        elif candle_pattern.startswith("شمعة صعود"):
+            reco = "📈 شراء 🟢"
+            reason = "نموذج شمعة صعود قوية يشير إلى احتمال استمرار الارتفاع."
+        elif candle_pattern.startswith("شمعة هبوط"):
+            reco = "📉 بيع 🔴"
+            reason = "نموذج شمعة هبوط قوية يشير إلى احتمال تراجع السعر."
         else:
             reco = "⚪ محايد"
-            reason = "لا توجد إشارة قوية"
+            reason = "السعر في منطقة تذبذب أو لا توجد إشارة واضحة حالياً."
 
-        # تحليل من AI
-        prompt = f"سعر الذهب الحالي {current}, RSI = {rsi:.2f}, EMA20 = {ema20:.2f}. ما هو التحليل الفني والتوصية؟"
-        ai_text = await explain_with_ai(prompt)
-
-        result = f"""📊 تحليل الذهب (XAU/USD) - {interval}
-🔸 السعر الحالي: {current}
+        text = f"""📊 تحليل الذهب (XAU/USD) - {interval}
+🔸 السعر الحالي: {round(current, 2)}
 📈 EMA20: {round(ema20, 2)}
-⚖️ RSI: {round(rsi, 2)}
+⚖️ RSI: {round(rsi_val, 2)}
 
 🧭 التوصية: {reco}
 📌 السبب: {reason}
-🔹 دخول: {current}
-
-🧠 تحليل AI:
-{ai_text}
+🔹 دخول: {round(current, 2)}
+🔎 نموذج الشمعة: {candle_pattern}
 """
-        await query.edit_message_text(result)
 
+        await query.edit_message_text(text)
     except Exception as e:
-        logger.error(f"خطأ في التحليل: {e}")
-        await query.edit_message_text("❌ حدث خطأ أثناء تحليل البيانات.")
+        await query.edit_message_text("حدث خطأ أثناء جلب البيانات أو تحليلها.")
+        logger.error(f"تحليل الذهب فشل: {e}")
 
-# 🚀 بدء تشغيل البوت
 if __name__ == "__main__":
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
