@@ -7,20 +7,17 @@ from telegram.ext import ApplicationBuilder, CallbackQueryHandler, ContextTypes,
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 TD_API_KEY = os.getenv("TD_API_KEY")
 
-# قائمة الفترات الزمنية المتاحة
 intervals = {
     "1min": "1 دقيقة",
     "15min": "15 دقيقة",
     "1h": "1 ساعة"
 }
 
-# واجهة البداية بزر
 async def welcome_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("ابدأ التحليل 📊", callback_data="select_interval")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("👋 مرحباً بك! اضغط على الزر للبدء.", reply_markup=reply_markup)
+    await update.message.reply_text("👋 مرحباً! اضغط على الزر للبدء.", reply_markup=reply_markup)
 
-# اختيار الإطار الزمني
 async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -31,10 +28,9 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("🕒 اختر الإطار الزمني (الشمعة):", reply_markup=reply_markup)
 
     elif query.data in intervals:
-        await query.edit_message_text(f"📡 جاري التحليل لـ {intervals[query.data]} ...")
+        await query.edit_message_text(f"📡 جاري التحليل لإطار {intervals[query.data]} ...")
         await analyze_gold(query, query.data)
 
-# التحليل الفعلي
 async def analyze_gold(query, interval="15min"):
     try:
         url = f"https://api.twelvedata.com/time_series?symbol=XAU/USD&interval={interval}&apikey={TD_API_KEY}&outputsize=30&format=JSON"
@@ -42,7 +38,7 @@ async def analyze_gold(query, interval="15min"):
         data = res.json()
 
         if "values" not in data:
-            await query.edit_message_text("❌ لم يتم جلب بيانات السوق.")
+            await query.edit_message_text("❌ لم أتمكن من جلب بيانات السوق. حاول مرة أخرى لاحقًا.")
             return
 
         df = pd.DataFrame(data["values"])
@@ -53,33 +49,51 @@ async def analyze_gold(query, interval="15min"):
         ema = df["close"].ewm(span=20).mean().iloc[-1]
         rsi = calculate_rsi(df["close"])
 
+        # التحليل والشرح
+        explanation = []
+        explanation.append(f"🔸 السعر الحالي للذهب (XAU/USD): {close_price:.2f}")
+        explanation.append(f"📈 المتوسط المتحرك الأسي (EMA 20): {ema:.2f}")
+        explanation.append(f"⚖️ مؤشر القوة النسبية (RSI): {rsi:.2f}\n")
+
+        # قواعد القرار مع شرح
         if close_price > ema and rsi < 70:
             decision = "شراء 🟢"
             stop = round(ema, 2)
             target = round(close_price + (close_price - ema), 2)
+
+            explanation.append("✅ السعر فوق EMA20، هذا مؤشر إيجابي يشير إلى اتجاه صاعد.")
+            explanation.append("✅ RSI أقل من 70، لا يشير إلى حالة تشبع شراء بعد.")
+            explanation.append("📊 لذلك، من المتوقع ارتفاع السعر، والتوصية: شراء.")
+            explanation.append(f"🔻 وقف الخسارة (Stop Loss) عند EMA20: {stop}")
+            explanation.append(f"🎯 الهدف المتوقع: {target}")
+
         elif close_price < ema and rsi > 30:
             decision = "بيع 🔴"
             stop = round(ema, 2)
             target = round(close_price - (ema - close_price), 2)
+
+            explanation.append("⚠️ السعر تحت EMA20، وهذا يشير إلى اتجاه هابط.")
+            explanation.append("⚠️ RSI أعلى من 30، لا يشير إلى حالة تشبع بيع.")
+            explanation.append("📉 لذلك، نتوقع انخفاض السعر، والتوصية: بيع.")
+            explanation.append(f"🔻 وقف الخسارة (Stop Loss) عند EMA20: {stop}")
+            explanation.append(f"🎯 الهدف المتوقع: {target}")
+
         else:
-            decision = "محايد ⚪"
+            decision = "انتظار ⚪"
             stop = target = None
+            explanation.append("ℹ️ السعر قريب من EMA20 أو RSI في مستويات متعادلة.")
+            explanation.append("⚠️ لذلك، من الأفضل الانتظار وعدم اتخاذ قرار حاليًا حتى تتضح الاتجاهات.")
 
-        msg = f"""📊 تحليل الذهب (XAU/USD) - إطار: {intervals[interval]}
+        message = f"""📊 تحليل الذهب (XAU/USD) - إطار: {intervals[interval]}
 
-🔸 السعر الحالي: {close_price:.2f}
-📈 EMA20: {ema:.2f}
-⚖️ RSI: {rsi:.2f}
+{chr(10).join(explanation)}
 
-🧭 التوصية: {decision}
-🔹 دخول: {close_price:.2f}
-{"🔻 وقف خسارة: " + str(stop) if stop else ""}
-{"🎯 هدف: " + str(target) if target else ""}
+🧭 التوصية النهائية: {decision}
         """
 
-        await query.message.reply_text(msg)
+        await query.message.reply_text(message)
     except Exception as e:
-        await query.message.reply_text(f"⚠️ حصل خطأ أثناء التحليل: {e}")
+        await query.message.reply_text(f"⚠️ حدث خطأ أثناء التحليل: {e}")
 
 def calculate_rsi(series, period=14):
     delta = series.diff().dropna()
