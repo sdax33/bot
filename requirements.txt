@@ -1,4 +1,4 @@
+setuptools>=68.0.0
 python-telegram-bot==20.3
 twelvedata==1.0.0
-setuptools
 pandas
