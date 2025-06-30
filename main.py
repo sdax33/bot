@@ -1,29 +1,36 @@
+import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
 
-import os
+# نحصل على التوكن من متغير البيئة
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-BOT_TOKEN = os.getenv("8169888968:AAFnPEROaUT3wdf4nZjJgy7BuAAwcV7JVXo")
-
-# أمر /start
+# دالة تنفيذ أمر /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("ابدأ التحليل 🔍", callback_data="analyze")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("مرحباً 👋\nاضغط الزر لتحليل الذهب", reply_markup=reply_markup)
+    await update.message.reply_text(
+        "مرحبًا بك في بوت تحليل الذهب 🟡\nاضغط الزر لتحليل السوق.",
+        reply_markup=reply_markup
+    )
 
-# عند الضغط على الزر
+# دالة تنفيذ التحليل (بشكل تجريبي الآن)
 async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    # هنا تقدر تضيف التحليل الحقيقي لاحقًا
-    await query.edit_message_text("📊 تحليل الذهب قيد التنفيذ... (نموذج تجريبي)")
+    # تحليل تجريبي – لاحقًا نضيف التحليل الحقيقي
+    await query.edit_message_text("📊 تحليل الذهب قيد التنفيذ...\n(هذا نموذج تجريبي، التحليل الحقيقي سيتم إضافته لاحقًا).")
 
+# تشغيل البوت
 if __name__ == '__main__':
+    if BOT_TOKEN is None:
+        raise ValueError("❌ لم يتم العثور على التوكن. تأكد من إضافة BOT_TOKEN إلى المتغيرات في Render.")
+
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(analyze_callback))
 
-    print("Bot is running...")
+    print("✅ البوت شغال الآن...")
     app.run_polling()
