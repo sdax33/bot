@@ -1,103 +1,103 @@
-import os
-import requests
-import pandas as pd
+import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler
+import httpx
+import os
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-TD_API_KEY = os.getenv("TD_API_KEY")
+TOKEN = os.environ.get("BOT_TOKEN")  # ضعه في بيئة السيرفر أو بدلها بنص مباشر
+TWELVE_API_KEY = os.environ.get("TWELVE_API_KEY")  # نفس الشيء
 
-intervals = {"5min": "5 دقائق", "15min": "15 دقيقة", "1h": "1 ساعة"}
+# إعدادات السجل
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-async def welcome_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("ابدأ التحليل 📊", callback_data="select_interval")]]
-    await update.message.reply_text("👋 أهلاً! اضغط الزر للبدء.", reply_markup=InlineKeyboardMarkup(keyboard))
+# أزرار بدء التشغيل
+start_keyboard = InlineKeyboardMarkup([
+    [InlineKeyboardButton("🔍 تحليل الذهب", callback_data="analyze")],
+])
 
-async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# أزرار اختيار الإطار الزمني
+timeframes_keyboard = InlineKeyboardMarkup([
+    [InlineKeyboardButton("1 دقيقة", callback_data="analyze_1min")],
+    [InlineKeyboardButton("5 دقائق", callback_data="analyze_5min")],
+    [InlineKeyboardButton("15 دقيقة", callback_data="analyze_15min")]
+])
+
+# أوامر البداية
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("👋 مرحبًا بك!\nاضغط على الزر أدناه لبدء تحليل الذهب:", reply_markup=start_keyboard)
+
+# التعامل مع الضغط على الأزرار
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if query.data == "select_interval":
-        keyboard = [[InlineKeyboardButton(name, callback_data=key)] for key, name in intervals.items()]
-        await query.edit_message_text("🕒 اختر الإطار الزمني:", reply_markup=InlineKeyboardMarkup(keyboard))
-    elif query.data in intervals:
-        await query.edit_message_text(f"📡 جاري تحليل الذهب لإطار {intervals[query.data]}...")
-        await analyze_gold(query, query.data)
 
+    if query.data == "analyze":
+        await query.edit_message_text("اختر الإطار الزمني:", reply_markup=timeframes_keyboard)
+
+    elif query.data.startswith("analyze_"):
+        interval = query.data.split("_")[1]  # مثل 5min
+        await analyze_gold(query, interval)
+
+# تحليل الذهب باستخدام TwelveData
 async def analyze_gold(query, interval):
+    symbol = "XAU/USD"
+    url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize=20&apikey={TWELVE_API_KEY}"
+
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url)
+        data = response.json()
+
     try:
-        url = f"https://api.twelvedata.com/time_series?symbol=XAU/USD&interval={interval}&apikey={TD_API_KEY}&outputsize=50&format=JSON"
-        res = requests.get(url)
-        data = res.json()
-        if "values" not in data:
-            raise Exception("لم أتمكن من جلب بيانات السوق.")
-        df = pd.DataFrame(data["values"])
-        df["close"] = df["close"].astype(float)
-        df = df.sort_values(by="datetime")
-        close = df.iloc[-1]["close"]
-        ema20 = df["close"].ewm(span=20).mean().iloc[-1]
-        rsi = calc_rsi(df["close"])
-        macd_line, signal = calc_macd(df["close"])
-        exp = []
+        candles = data['values']
+        current = float(candles[0]['close'])
+        ema20 = sum(float(c['close']) for c in candles[:20]) / 20
 
-        exp.append(f"🔸 السعر الحالي: {close:.2f}")
-        exp.append(f"📈 EMA20: {ema20:.2f}")
-        exp.append(f"⚖️ RSI: {rsi:.2f}")
-        exp.append(f"📊 MACD: {macd_line:.4f}, Signal: {signal:.4f}\n")
+        # RSI حساب تقريبي
+        gains = []
+        losses = []
+        for i in range(1, 15):
+            diff = float(candles[i - 1]['close']) - float(candles[i]['close'])
+            if diff > 0:
+                gains.append(diff)
+            else:
+                losses.append(abs(diff))
 
-        decision = "انتظار ⚪"
-        if close > ema20 and rsi < 70 and macd_line > signal:
-            decision = "شراء 🟢"
-            stop = round(ema20, 2)
-            target = round(close + (close - ema20), 2)
-            exp += [
-                "✅ السعر أعلى EMA20 → اتجاه صاعد.",
-                "✅ RSI أقل من 70 → لا يوجد تشبع شراء.",
-                "✅ MACD فوق الإشارة → تقاطع إيجابي.",
-                f"🔻 وقف خسارة: {stop}",
-                f"🎯 الهدف: {target}"
-            ]
-        elif close < ema20 and rsi > 30 and macd_line < signal:
-            decision = "بيع 🔴"
-            stop = round(ema20, 2)
-            target = round(close - (ema20 - close), 2)
-            exp += [
-                "⚠️ السعر أقل من EMA20 → اتجاه هابط.",
-                "⚠️ RSI أكبر من 30 → لا يوجد تشبع بيع.",
-                "⚠️ MACD تحت الإشارة → تقاطع سلبي.",
-                f"🔻 وقف خسارة: {stop}",
-                f"🎯 الهدف: {target}"
-            ]
+        avg_gain = sum(gains) / 14 if gains else 0.01
+        avg_loss = sum(losses) / 14 if losses else 0.01
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+
+        # التوصية
+        if rsi > 70 and current > ema20:
+            reco = "📉 بيع 🔴"
+            reason = "السعر مرتفع جدًا (RSI > 70) ويتجاوز المتوسط - احتمال تصحيح"
+        elif rsi < 30 and current < ema20:
+            reco = "📈 شراء 🟢"
+            reason = "السعر منخفض (RSI < 30) وتحت المتوسط - احتمال ارتداد"
         else:
-            exp += [
-                "ℹ️ الوضع غير واضح:",
-                ("- السعر قريب من EMA20 أو RSI أو MACD لا يعطي توصية واضحة."),
-                "📌 التوصية: الانتظار حتى تتضح المؤشرات."
-            ]
+            reco = "⚪ محايد"
+            reason = "السعر في منطقة تذبذب (لا توجد إشارة قوية حاليًا)"
 
-        message = f"📊 تحليل الذهب ({intervals[interval]})\n\n" + "\n".join(exp) + f"\n\n🧭 التوصية النهائية: {decision}"
-        await query.message.reply_text(message)
+        text = f"""📊 تحليل الذهب (XAU/USD) - {interval}
+🔸 السعر الحالي: {current}
+📈 EMA20: {round(ema20, 2)}
+⚖️ RSI: {round(rsi, 2)}
+
+🧭 التوصية: {reco}
+📌 السبب: {reason}
+🔹 دخول: {current}"""
+
+        await query.edit_message_text(text)
     except Exception as e:
-        await query.message.reply_text(f"⚠️ خطأ أثناء التحليل: {e}")
+        await query.edit_message_text("حدث خطأ أثناء جلب البيانات أو تحليلها.")
+        logger.error(f"تحليل الذهب فشل: {e}")
 
-def calc_rsi(series, period=14):
-    delta = series.diff().dropna()
-    gain = delta.where(delta > 0, 0).rolling(period).mean()
-    loss = -delta.where(delta < 0, 0).rolling(period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs)).iloc[-1]
-
-def calc_macd(series, fast=12, slow=26, signal_period=9):
-    exp1 = series.ewm(span=fast).mean()
-    exp2 = series.ewm(span=slow).mean()
-    macd = exp1 - exp2
-    signal = macd.ewm(span=signal_period).mean()
-    return macd.iloc[-1], signal.iloc[-1]
-
+# تشغيل البوت
 if __name__ == "__main__":
-    if not (BOT_TOKEN and TD_API_KEY):
-        raise Exception("❗ تأكد من BOT_TOKEN وTD_API_KEY في البيئة.")
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, welcome_message))
-    app.add_handler(CallbackQueryHandler(handle_callbacks))
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(handle_callback))
+
     print("✅ البوت شغال الآن...")
     app.run_polling()
