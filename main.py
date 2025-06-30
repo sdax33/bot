@@ -2,7 +2,7 @@ import os
 import requests
 import pandas as pd
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 TD_API_KEY = os.getenv("TD_API_KEY")
@@ -16,7 +16,7 @@ async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    url = f"https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=15min&apikey={TD_API_KEY}&outputsize=20&format=JSON"
+    url = f"https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=15min&apikey={TD_API_KEY}&outputsize=30&format=JSON"
     
     try:
         res = requests.get(url)
@@ -71,7 +71,7 @@ def calculate_rsi(series, period=14):
 
 if __name__ == "__main__":
     if not BOT_TOKEN or not TD_API_KEY:
-        raise Exception("❗ تأكد من وجود BOT_TOKEN وTD_API_KEY في البيئة.")
+        raise Exception("❗ تأكد من وجود BOT_TOKEN وTD_API_KEY في متغيرات البيئة.")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
