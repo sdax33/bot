@@ -104,18 +104,31 @@ async def analyze_gold(query, interval):
             candle_pattern = "شمعة هبوط قوية (Bearish Engulfing محتمل)"
 
         # تحليل التوصية بناءً على EMA و RSI و نموذج الشمعة
+        reco = ""
+        reason = ""
+        stop_loss = None
+        take_profit = None
+
         if rsi_val > 70 and current > ema20:
             reco = "📉 بيع 🔴"
             reason = "السعر مرتفع جداً والـ RSI فوق 70، مع إشارة إلى تشبع الشراء."
+            stop_loss = round(current * 1.02, 2)  # 2% فوق السعر
+            take_profit = round(current * 0.98, 2)  # 2% تحت السعر
         elif rsi_val < 30 and current < ema20:
             reco = "📈 شراء 🟢"
             reason = "السعر منخفض جداً والـ RSI تحت 30، مع احتمال ارتداد."
+            stop_loss = round(current * 0.98, 2)  # 2% تحت السعر
+            take_profit = round(current * 1.02, 2)  # 2% فوق السعر
         elif candle_pattern.startswith("شمعة صعود"):
             reco = "📈 شراء 🟢"
             reason = "نموذج شمعة صعود قوية يشير إلى احتمال استمرار الارتفاع."
+            stop_loss = round(current * 0.98, 2)  # 2% تحت السعر
+            take_profit = round(current * 1.02, 2)  # 2% فوق السعر
         elif candle_pattern.startswith("شمعة هبوط"):
             reco = "📉 بيع 🔴"
             reason = "نموذج شمعة هبوط قوية يشير إلى احتمال تراجع السعر."
+            stop_loss = round(current * 1.02, 2)  # 2% فوق السعر
+            take_profit = round(current * 0.98, 2)  # 2% تحت السعر
         else:
             reco = "⚪ محايد"
             reason = "السعر في منطقة تذبذب أو لا توجد إشارة واضحة حالياً."
@@ -129,6 +142,9 @@ async def analyze_gold(query, interval):
 📌 السبب: {reason}
 🔹 دخول: {round(current, 2)}
 🔎 نموذج الشمعة: {candle_pattern}
+
+🛑 **ستوب لوس**: {stop_loss}
+💰 **بروفيت**: {take_profit}
 """
 
         await query.edit_message_text(text)
